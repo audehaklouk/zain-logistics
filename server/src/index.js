@@ -18,7 +18,7 @@ const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
-app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
+// Uploads served only through authenticated /api/documents/download/:id route
 
 // Initialize database
 getDb();
@@ -41,7 +41,12 @@ app.get('*', (req, res, next) => {
   res.sendFile(path.join(clientDist, 'index.html'));
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Zain Logistics API running on port ${PORT}`);
-});
+// Only listen in standalone mode (not Vercel serverless)
+if (!process.env.VERCEL) {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Zain Logistics API running on port ${PORT}`);
+  });
+}
+
+export default app;
 

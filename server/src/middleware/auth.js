@@ -1,6 +1,10 @@
 import jwt from 'jsonwebtoken';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'zain-logistics-secret-key-2026';
+import crypto from 'crypto';
+
+// In production, JWT_SECRET must be set as an environment variable.
+// For local dev/demo, a random secret is generated per process start.
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
 
 export function generateToken(user) {
   return jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });

@@ -8,7 +8,8 @@ import { getDb } from '../db/database.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const uploadsDir = path.join(__dirname, '..', '..', 'uploads');
+const isVercel = !!process.env.VERCEL;
+const uploadsDir = isVercel ? '/tmp/uploads' : path.join(__dirname, '..', '..', 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
 const storage = multer.diskStorage({
