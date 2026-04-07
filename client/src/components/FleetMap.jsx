@@ -75,7 +75,7 @@ export default function FleetMap() {
     return () => { map.remove(); mapInstanceRef.current = null; };
   }, [fleet]);
 
-  if (!fleet.length) return <div className="h-[300px] bg-gray-50 rounded-lg flex items-center justify-center text-gray-400 text-sm">No active shipments to track</div>;
+  if (!fleet.length) return <div className="h-[500px] bg-gray-50 rounded-lg flex items-center justify-center text-gray-400 text-sm">No active shipments to track</div>;
 
-  return <div ref={mapRef} className="h-[350px] rounded-lg overflow-hidden border border-gray-100" />;
+  return <div ref={mapRef} className="h-[500px] rounded-lg overflow-hidden border border-gray-100" />;
 }
