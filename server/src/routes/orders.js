@@ -1,194 +1,213 @@
 import { Router } from 'express';
-import { v4 as uuid } from 'uuid';
 import { getDb } from '../db/database.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
+import { v4 as uuid } from 'uuid';
 
 const router = Router();
 
-const STATUS_FLOW = ['Draft', 'Sent', 'Confirmed', 'Shipped', 'In Transit', 'Delivered'];
-
 function getNextOrderNumber(db) {
   const year = new Date().getFullYear();
-  const last = db.prepare("SELECT order_number FROM orders WHERE order_number LIKE ? ORDER BY order_number DESC LIMIT 1").get(`ZL-${year}-%`);
-  if (!last) return `ZL-${year}-0001`;
-  const num = parseInt(last.order_number.split('-')[2]) + 1;
-  return `ZL-${year}-${String(num).padStart(4, '0')}`;
+  const row = db.prepare(
+    "SELECT order_number FROM orders WHERE order_number LIKE ? ORDER BY id DESC LIMIT 1"
+  ).get(`ORD-${year}-%`);
+  if (!row) return `ORD-${year}-001`;
+  const num = parseInt(row.order_number.split('-')[2]) + 1;
+  return `ORD-${year}-${String(num).padStart(3, '0')}`;
 }
 
+// GET /api/orders — list with search, filter, pagination
 router.get('/', authenticate, (req, res) => {
   const db = getDb();
-  const { status, supplier_id, search, sort_by, sort_dir, date_from, date_to } = req.query;
-  let sql = `SELECT o.*, s.company_name as supplier_name,
-    (SELECT COUNT(*) FROM documents d WHERE d.order_id = o.id) as document_count
-    FROM orders o LEFT JOIN suppliers s ON o.supplier_id = s.id WHERE 1=1`;
+  const { search, status, supplier_id, category, destination, sort_by, sort_dir } = req.query;
+
+  let sql = `
+    SELECT o.*, s.name as supplier_name
+    FROM orders o
+    LEFT JOIN suppliers s ON o.supplier_id = s.id
+    WHERE 1=1
+  `;
   const params = [];
 
+  if (search) {
+    sql += ' AND (o.order_number LIKE ? OR o.product_name LIKE ? OR s.name LIKE ?)';
+    const q = `%${search}%`;
+    params.push(q, q, q);
+  }
   if (status) { sql += ' AND o.status = ?'; params.push(status); }
   if (supplier_id) { sql += ' AND o.supplier_id = ?'; params.push(supplier_id); }
-  if (date_from) { sql += ' AND o.order_date >= ?'; params.push(date_from); }
-  if (date_to) { sql += ' AND o.order_date <= ?'; params.push(date_to); }
-  if (search) {
-    sql += ' AND (o.order_number LIKE ? OR o.product_name LIKE ? OR s.company_name LIKE ?)';
-    const s = `%${search}%`;
-    params.push(s, s, s);
-  }
+  if (category) { sql += ' AND o.category = ?'; params.push(category); }
+  if (destination) { sql += ' AND o.destination = ?'; params.push(destination); }
 
-  const sortCol = { date: 'o.order_date', status: 'o.status', delivery: 'o.expected_delivery_date', amount: 'o.total_amount' }[sort_by] || 'o.created_at';
+  const sortMap = { date: 'o.date', status: 'o.status', arrival: 'o.expected_arrival', amount: 'o.amount' };
+  const col = sortMap[sort_by] || 'o.id';
   const dir = sort_dir === 'asc' ? 'ASC' : 'DESC';
-  sql += ` ORDER BY ${sortCol} ${dir}`;
+  sql += ` ORDER BY ${col} ${dir}`;
 
   res.json(db.prepare(sql).all(...params));
 });
 
+// GET /api/orders/stats — dashboard stats
 router.get('/stats', authenticate, (req, res) => {
   const db = getDb();
   const today = new Date().toISOString().split('T')[0];
   const weekFromNow = new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0];
 
-  const active = db.prepare("SELECT COUNT(*) as count FROM orders WHERE status NOT IN ('Draft', 'Delivered')").get();
-  const pending = db.prepare("SELECT COUNT(*) as count FROM orders WHERE status IN ('Confirmed', 'Shipped')").get();
-  const arrivingThisWeek = db.prepare("SELECT COUNT(*) as count FROM orders WHERE expected_delivery_date BETWEEN ? AND ? AND status != 'Delivered'").get(today, weekFromNow);
-
-  // Alerts: overdue (Sent > 7 days without Confirmed), missing docs, arriving soon
-  const overdueCount = db.prepare(`
-    SELECT COUNT(*) as count FROM orders o
-    WHERE o.status = 'Sent' AND julianday('now') - julianday(o.order_date) > 7
-  `).get();
-  const missingDocsCount = db.prepare(`
-    SELECT COUNT(*) as count FROM orders o
-    WHERE o.status IN ('Confirmed', 'Shipped', 'In Transit')
-    AND (SELECT COUNT(*) FROM documents d WHERE d.order_id = o.id) = 0
-  `).get();
-  const alertCount = (overdueCount?.count || 0) + (missingDocsCount?.count || 0);
-
-  // Monthly stats for charts
-  const monthlyOrders = db.prepare(`
-    SELECT strftime('%Y-%m', order_date) as month, COUNT(*) as count, SUM(total_amount) as total
-    FROM orders WHERE order_date >= date('now', '-6 months')
-    GROUP BY month ORDER BY month
-  `).all();
+  const active = db.prepare("SELECT COUNT(*) as count FROM orders WHERE status NOT IN ('pending','delivered','cancelled')").get();
+  const inTransit = db.prepare("SELECT COUNT(*) as count FROM orders WHERE status = 'in_transit'").get();
+  const arrivingSoon = db.prepare(
+    "SELECT COUNT(*) as count FROM orders WHERE expected_arrival BETWEEN ? AND ? AND status NOT IN ('delivered','cancelled')"
+  ).get(today, weekFromNow);
 
   const statusBreakdown = db.prepare('SELECT status, COUNT(*) as count FROM orders GROUP BY status').all();
-
-  const spendBySupplier = db.prepare(`
-    SELECT s.company_name, SUM(o.total_amount) as total
-    FROM orders o JOIN suppliers s ON o.supplier_id = s.id
-    GROUP BY o.supplier_id ORDER BY total DESC LIMIT 5
+  const monthlyOrders = db.prepare(`
+    SELECT strftime('%Y-%m', date) as month, COUNT(*) as count, SUM(amount) as total
+    FROM orders WHERE date >= date('now', '-6 months')
+    GROUP BY month ORDER BY month
   `).all();
 
   res.json({
     active_orders: active.count,
-    pending_shipment: pending.count,
-    arriving_this_week: arrivingThisWeek.count,
-    alert_count: alertCount,
-    monthly_orders: monthlyOrders,
+    in_transit: inTransit.count,
+    pending_shipment: inTransit.count,  // backward compat for dashboard
+    arriving_this_week: arrivingSoon.count,
+    alert_count: 0,
     status_breakdown: statusBreakdown,
-    spend_by_supplier: spendBySupplier,
+    monthly_orders: monthlyOrders,
   });
 });
 
+// GET /api/orders/alerts — dashboard alerts stub
 router.get('/alerts', authenticate, (req, res) => {
-  const db = getDb();
-  const today = new Date().toISOString().split('T')[0];
-  const weekFromNow = new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0];
-
-  const overdue = db.prepare(`
-    SELECT o.*, s.company_name as supplier_name FROM orders o
-    LEFT JOIN suppliers s ON o.supplier_id = s.id
-    WHERE o.status = 'Sent' AND julianday('now') - julianday(o.order_date) > 7
-  `).all();
-
-  const missingDocs = db.prepare(`
-    SELECT o.*, s.company_name as supplier_name FROM orders o
-    LEFT JOIN suppliers s ON o.supplier_id = s.id
-    WHERE o.status IN ('Confirmed', 'Shipped', 'In Transit')
-    AND (SELECT COUNT(*) FROM documents d WHERE d.order_id = o.id) = 0
-  `).all();
-
-  const arrivingSoon = db.prepare(`
-    SELECT o.*, s.company_name as supplier_name FROM orders o
-    LEFT JOIN suppliers s ON o.supplier_id = s.id
-    WHERE o.expected_delivery_date BETWEEN ? AND ? AND o.status != 'Delivered'
-  `).all(today, weekFromNow);
-
-  res.json({ overdue, missing_docs: missingDocs, arriving_soon: arrivingSoon });
+  res.json({ overdue: [], missing_docs: [], arriving_soon: [] });
 });
 
+// GET /api/orders/:id — single order
 router.get('/:id', authenticate, (req, res) => {
   const db = getDb();
   const order = db.prepare(`
-    SELECT o.*, s.company_name as supplier_name, s.contact_person as supplier_contact, s.country as supplier_country
-    FROM orders o LEFT JOIN suppliers s ON o.supplier_id = s.id WHERE o.id = ?
+    SELECT o.*, s.name as supplier_name, s.contact_name as supplier_contact, s.country as supplier_country
+    FROM orders o
+    LEFT JOIN suppliers s ON o.supplier_id = s.id
+    WHERE o.id = ?
   `).get(req.params.id);
   if (!order) return res.status(404).json({ error: 'Order not found' });
-
-  const statusLog = db.prepare(`
-    SELECT osl.*, u.display_name as changed_by_name
-    FROM order_status_log osl LEFT JOIN users u ON osl.changed_by = u.id
-    WHERE osl.order_id = ? ORDER BY osl.changed_at ASC
-  `).all(req.params.id);
-
-  const documents = db.prepare(`
-    SELECT d.*, dt.name as document_type_name, u.display_name as uploaded_by_name
-    FROM documents d
-    LEFT JOIN document_types dt ON d.document_type_id = dt.id
-    LEFT JOIN users u ON d.uploaded_by = u.id
-    WHERE d.order_id = ? ORDER BY d.created_at DESC
-  `).all(req.params.id);
-
-  res.json({ ...order, status_log: statusLog, documents });
+  // Parse containers JSON
+  try { order.containers = JSON.parse(order.containers || '[]'); } catch { order.containers = []; }
+  res.json(order);
 });
 
+// POST /api/orders — create
 router.post('/', authenticate, (req, res) => {
   const db = getDb();
-  const id = uuid();
+  const {
+    containers, destination, destination_custom, bank, amount, currency,
+    category, shipping_tracking_number, expected_arrival, shipping_line,
+    shipping_line_custom, original_docs_received, status, product_name, supplier_id, notes
+  } = req.body;
+
+  if (!destination) return res.status(400).json({ error: 'Destination is required' });
+  if (!category) return res.status(400).json({ error: 'Category is required' });
+  if (!containers || !Array.isArray(containers) || containers.length === 0) {
+    return res.status(400).json({ error: 'At least one container must be selected' });
+  }
+
   const order_number = getNextOrderNumber(db);
-  const { supplier_id, order_date, expected_delivery_date, product_name, quantity, unit_size, currency, total_amount, notes, booking_number, shipping_line } = req.body;
+  const date = new Date().toISOString().split('T')[0];
 
-  db.prepare(`INSERT INTO orders (id, order_number, supplier_id, order_date, expected_delivery_date, product_name, quantity, unit_size, currency, total_amount, status, notes, booking_number, shipping_line, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Draft', ?, ?, ?, ?)`).run(id, order_number, supplier_id, order_date, expected_delivery_date, product_name, quantity, unit_size, currency || 'USD', total_amount || 0, notes, booking_number, shipping_line, req.user.id);
+  const result = db.prepare(`
+    INSERT INTO orders
+      (order_number, containers, destination, destination_custom, bank, amount, currency,
+       date, category, shipping_tracking_number, expected_arrival, shipping_line, shipping_line_custom,
+       tracking_source, original_docs_received, status, product_name, supplier_id, notes)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(
+    order_number,
+    JSON.stringify(containers),
+    destination,
+    destination_custom || null,
+    bank || null,
+    amount != null && amount !== '' ? parseFloat(amount) : null,
+    currency || null,
+    date,
+    category,
+    shipping_tracking_number || null,
+    expected_arrival || null,
+    shipping_line || null,
+    shipping_line_custom || null,
+    shipping_line && shipping_line !== 'other' ? 'api' : 'manual',
+    original_docs_received ? 1 : 0,
+    status || 'pending',
+    product_name || null,
+    supplier_id || null,
+    notes || null
+  );
 
-  db.prepare('INSERT INTO order_status_log (id, order_id, from_status, to_status, changed_by, notes) VALUES (?, ?, NULL, ?, ?, ?)').run(uuid(), id, 'Draft', req.user.id, 'Order created');
-  db.prepare('INSERT INTO activity_log (id, action, entity_type, entity_id, details, user_id) VALUES (?, ?, ?, ?, ?, ?)').run(uuid(), 'created', 'order', id, `Order ${order_number} created`, req.user.id);
+  db.prepare('INSERT INTO activity_log (id,action,entity_type,entity_id,details,user_id) VALUES (?,?,?,?,?,?)')
+    .run(uuid(), 'created', 'order', String(result.lastInsertRowid), `Order ${order_number} created`, req.user.id);
 
-  res.status(201).json({ id, order_number });
+  res.status(201).json({ id: result.lastInsertRowid, order_number });
 });
 
+// PUT /api/orders/:id — update
 router.put('/:id', authenticate, (req, res) => {
   const db = getDb();
   const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(req.params.id);
   if (!order) return res.status(404).json({ error: 'Order not found' });
 
-  const { supplier_id, order_date, expected_delivery_date, product_name, quantity, unit_size, currency, total_amount, notes, booking_number, shipping_line, container_number, vessel_name } = req.body;
+  const {
+    containers, destination, destination_custom, bank, amount, currency,
+    category, shipping_tracking_number, expected_arrival, shipping_line,
+    shipping_line_custom, original_docs_received, status, product_name, supplier_id, notes
+  } = req.body;
 
-  db.prepare(`UPDATE orders SET supplier_id=COALESCE(?,supplier_id), order_date=COALESCE(?,order_date), expected_delivery_date=COALESCE(?,expected_delivery_date), product_name=COALESCE(?,product_name), quantity=COALESCE(?,quantity), unit_size=COALESCE(?,unit_size), currency=COALESCE(?,currency), total_amount=COALESCE(?,total_amount), notes=COALESCE(?,notes), booking_number=COALESCE(?,booking_number), shipping_line=COALESCE(?,shipping_line), container_number=COALESCE(?,container_number), vessel_name=COALESCE(?,vessel_name), updated_at=datetime('now') WHERE id=?`).run(supplier_id, order_date, expected_delivery_date, product_name, quantity, unit_size, currency, total_amount, notes, booking_number, shipping_line, container_number, vessel_name, req.params.id);
+  db.prepare(`
+    UPDATE orders SET
+      containers = COALESCE(?, containers),
+      destination = COALESCE(?, destination),
+      destination_custom = ?,
+      bank = ?,
+      amount = ?,
+      currency = ?,
+      category = COALESCE(?, category),
+      shipping_tracking_number = ?,
+      expected_arrival = ?,
+      shipping_line = ?,
+      shipping_line_custom = ?,
+      original_docs_received = COALESCE(?, original_docs_received),
+      status = COALESCE(?, status),
+      product_name = COALESCE(?, product_name),
+      supplier_id = COALESCE(?, supplier_id),
+      notes = ?,
+      updated_at = datetime('now')
+    WHERE id = ?
+  `).run(
+    containers ? JSON.stringify(containers) : null,
+    destination || null,
+    destination_custom !== undefined ? (destination_custom || null) : order.destination_custom,
+    bank !== undefined ? (bank || null) : order.bank,
+    amount !== undefined ? (amount != null && amount !== '' ? parseFloat(amount) : null) : order.amount,
+    currency !== undefined ? (currency || null) : order.currency,
+    category || null,
+    shipping_tracking_number !== undefined ? (shipping_tracking_number || null) : order.shipping_tracking_number,
+    expected_arrival !== undefined ? (expected_arrival || null) : order.expected_arrival,
+    shipping_line !== undefined ? (shipping_line || null) : order.shipping_line,
+    shipping_line_custom !== undefined ? (shipping_line_custom || null) : order.shipping_line_custom,
+    original_docs_received !== undefined ? (original_docs_received ? 1 : 0) : null,
+    status || null,
+    product_name || null,
+    supplier_id || null,
+    notes !== undefined ? (notes || null) : order.notes,
+    req.params.id
+  );
 
   res.json({ success: true });
 });
 
-router.put('/:id/status', authenticate, (req, res) => {
-  const db = getDb();
-  const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(req.params.id);
-  if (!order) return res.status(404).json({ error: 'Order not found' });
-
-  const { status, notes } = req.body;
-  const currentIdx = STATUS_FLOW.indexOf(order.status);
-  const newIdx = STATUS_FLOW.indexOf(status);
-  if (newIdx < 0) return res.status(400).json({ error: 'Invalid status' });
-  if (newIdx !== currentIdx + 1 && newIdx !== currentIdx) {
-    return res.status(400).json({ error: `Cannot transition from ${order.status} to ${status}` });
-  }
-
-  db.prepare('UPDATE orders SET status = ?, updated_at = datetime(\'now\') WHERE id = ?').run(status, req.params.id);
-  db.prepare('INSERT INTO order_status_log (id, order_id, from_status, to_status, changed_by, notes) VALUES (?, ?, ?, ?, ?, ?)').run(uuid(), req.params.id, order.status, status, req.user.id, notes || `Status changed to ${status}`);
-  db.prepare('INSERT INTO activity_log (id, action, entity_type, entity_id, details, user_id) VALUES (?, ?, ?, ?, ?, ?)').run(uuid(), 'status_changed', 'order', req.params.id, `Order ${order.order_number} status: ${order.status} → ${status}`, req.user.id);
-
-  res.json({ success: true });
-});
-
+// DELETE /api/orders/:id — admin only
 router.delete('/:id', authenticate, requireAdmin, (req, res) => {
   const db = getDb();
-  db.prepare('DELETE FROM documents WHERE order_id = ?').run(req.params.id);
-  db.prepare('DELETE FROM order_status_log WHERE order_id = ?').run(req.params.id);
+  db.prepare('DELETE FROM payments WHERE order_id = ?').run(req.params.id);
+  db.prepare('UPDATE documents SET order_id = NULL WHERE order_id = ?').run(req.params.id);
   db.prepare('DELETE FROM orders WHERE id = ?').run(req.params.id);
   res.json({ success: true });
 });

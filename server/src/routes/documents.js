@@ -1,98 +1,116 @@
 import { Router } from 'express';
-import { v4 as uuid } from 'uuid';
 import multer from 'multer';
-import path from 'path';
-import fs from 'fs';
-import { fileURLToPath } from 'url';
 import { getDb } from '../db/database.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
+import { uploadFile, getDownloadUrl, deleteFile, buildKey } from '../services/s3.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const isVercel = !!process.env.VERCEL;
-const uploadsDir = isVercel ? '/tmp/uploads' : path.join(__dirname, '..', '..', 'uploads');
-if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadsDir),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `${uuid()}${ext}`);
+// Use memory storage — buffer is handed off to S3 or written to disk by the service
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allowed = ['application/pdf', 'image/jpeg', 'image/png'];
+    cb(null, allowed.includes(file.mimetype));
   },
 });
-const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } });
 
 const router = Router();
 
+// GET /api/documents — list (optionally filtered by supplier or invoice search)
 router.get('/', authenticate, (req, res) => {
   const db = getDb();
-  const { order_id, document_type_id } = req.query;
-  let sql = `SELECT d.*, dt.name as document_type_name, o.order_number, u.display_name as uploaded_by_name
+  const { supplier_id, search } = req.query;
+  let sql = `
+    SELECT d.*, s.name as supplier_name, o.order_number
     FROM documents d
-    LEFT JOIN document_types dt ON d.document_type_id = dt.id
+    LEFT JOIN suppliers s ON d.supplier_id = s.id
     LEFT JOIN orders o ON d.order_id = o.id
-    LEFT JOIN users u ON d.uploaded_by = u.id WHERE 1=1`;
+    WHERE 1=1
+  `;
   const params = [];
-  if (order_id) { sql += ' AND d.order_id = ?'; params.push(order_id); }
-  if (document_type_id) { sql += ' AND d.document_type_id = ?'; params.push(document_type_id); }
+  if (supplier_id) { sql += ' AND d.supplier_id = ?'; params.push(supplier_id); }
+  if (search) { sql += ' AND d.invoice_number LIKE ?'; params.push(`%${search}%`); }
   sql += ' ORDER BY d.created_at DESC';
   res.json(db.prepare(sql).all(...params));
 });
 
-router.post('/upload', authenticate, upload.single('file'), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-  const { order_id, document_type_id } = req.body;
-  if (!order_id || !document_type_id) return res.status(400).json({ error: 'order_id and document_type_id required' });
+// POST /api/documents/upload
+router.post('/upload', authenticate, upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded or invalid file type (PDF, JPG, PNG only)' });
+  const { supplier_id, invoice_number, order_id } = req.body;
+  if (!supplier_id)    return res.status(400).json({ error: 'supplier_id is required' });
+  if (!invoice_number) return res.status(400).json({ error: 'invoice_number is required' });
 
-  const db = getDb();
-  const id = uuid();
-  db.prepare('INSERT INTO documents (id, order_id, document_type_id, file_name, original_name, file_size, mime_type, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(id, order_id, document_type_id, req.file.filename, req.file.originalname, req.file.size, req.file.mimetype, req.user.id);
+  try {
+    const key = buildKey('documents', supplier_id, req.file.originalname);
+    const storedKey = await uploadFile(req.file.buffer, key, req.file.mimetype);
 
-  const order = db.prepare('SELECT order_number FROM orders WHERE id = ?').get(order_id);
-  db.prepare('INSERT INTO activity_log (id, action, entity_type, entity_id, details, user_id) VALUES (?, ?, ?, ?, ?, ?)').run(uuid(), 'document_uploaded', 'document', order_id, `Document uploaded for ${order?.order_number || 'unknown'}`, req.user.id);
+    const db = getDb();
+    const result = db.prepare(`
+      INSERT INTO documents (supplier_id, order_id, invoice_number, file_path, file_name, file_size, mime_type)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      supplier_id,
+      order_id || null,
+      invoice_number,
+      storedKey,
+      req.file.originalname,
+      req.file.size,
+      req.file.mimetype
+    );
 
-  res.status(201).json({ id, file_name: req.file.filename });
+    res.status(201).json({ id: result.lastInsertRowid, file_name: req.file.originalname });
+  } catch (err) {
+    console.error('[documents] upload error:', err);
+    res.status(500).json({ error: 'Upload failed' });
+  }
 });
 
-router.get('/download/:id', authenticate, (req, res) => {
+// GET /api/documents/:id/download
+router.get('/:id/download', authenticate, async (req, res) => {
   const db = getDb();
   const doc = db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
   if (!doc) return res.status(404).json({ error: 'Document not found' });
-  const filePath = path.join(uploadsDir, doc.file_name);
-  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found on disk' });
-  res.download(filePath, doc.original_name);
+
+  try {
+    const result = await getDownloadUrl(doc.file_path, doc.file_name);
+    if (result.type === 's3') {
+      return res.redirect(result.url);
+    }
+    // Local disk
+    return res.download(result.path, result.name, (err) => {
+      if (err) res.status(404).json({ error: 'File not found on disk' });
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Download failed' });
+  }
 });
 
-router.delete('/:id', authenticate, requireAdmin, (req, res) => {
+// DELETE /api/documents/:id
+router.delete('/:id', authenticate, requireAdmin, async (req, res) => {
   const db = getDb();
   const doc = db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
   if (!doc) return res.status(404).json({ error: 'Document not found' });
-  const filePath = path.join(uploadsDir, doc.file_name);
-  if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+
+  await deleteFile(doc.file_path);
   db.prepare('DELETE FROM documents WHERE id = ?').run(req.params.id);
   res.json({ success: true });
 });
 
-// Document types
-router.get('/types', authenticate, (req, res) => {
+// GET /api/documents/search?q=
+router.get('/search', authenticate, (req, res) => {
   const db = getDb();
-  res.json(db.prepare('SELECT * FROM document_types ORDER BY name').all());
-});
-
-router.post('/types', authenticate, requireAdmin, (req, res) => {
-  const { name } = req.body;
-  if (!name) return res.status(400).json({ error: 'Name required' });
-  const db = getDb();
-  const id = uuid();
-  db.prepare('INSERT INTO document_types (id, name) VALUES (?, ?)').run(id, name);
-  res.status(201).json({ id, name });
-});
-
-router.delete('/types/:id', authenticate, requireAdmin, (req, res) => {
-  const db = getDb();
-  const docs = db.prepare('SELECT COUNT(*) as count FROM documents WHERE document_type_id = ?').get(req.params.id);
-  if (docs.count > 0) return res.status(400).json({ error: 'Cannot delete type with existing documents' });
-  db.prepare('DELETE FROM document_types WHERE id = ?').run(req.params.id);
-  res.json({ success: true });
+  const { q } = req.query;
+  if (!q) return res.json([]);
+  const docs = db.prepare(`
+    SELECT d.*, s.name as supplier_name, o.order_number
+    FROM documents d
+    LEFT JOIN suppliers s ON d.supplier_id = s.id
+    LEFT JOIN orders o ON d.order_id = o.id
+    WHERE d.invoice_number LIKE ?
+    ORDER BY d.created_at DESC
+  `).all(`%${q}%`);
+  res.json(docs);
 });
 
 export default router;

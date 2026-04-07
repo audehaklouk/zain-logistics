@@ -9,8 +9,12 @@ import OrderDetail from './pages/OrderDetail';
 import OrderForm from './pages/OrderForm';
 import Suppliers from './pages/Suppliers';
 import Documents from './pages/Documents';
+import Payments from './pages/Payments';
 import Reports from './pages/Reports';
+import Claims from './pages/Claims';
+import Calendar from './pages/Calendar';
 import Users from './pages/Users';
+import AdminPanel from './pages/AdminPanel';
 import Notifications from './pages/Notifications';
 
 function ProtectedRoute({ children }) {
@@ -34,8 +38,13 @@ export default function App() {
           <Route path="orders/:id/edit" element={<OrderForm />} />
           <Route path="suppliers" element={<Suppliers />} />
           <Route path="documents" element={<Documents />} />
+          <Route path="documents/supplier/:supplierId" element={<Documents />} />
+          <Route path="payments" element={<Payments />} />
           <Route path="reports" element={<Reports />} />
+          <Route path="claims" element={<Claims />} />
+          <Route path="calendar" element={<Calendar />} />
           <Route path="users" element={<Users />} />
+          <Route path="admin" element={<AdminPanel />} />
           <Route path="notifications" element={<Notifications />} />
         </Route>
       </Routes>

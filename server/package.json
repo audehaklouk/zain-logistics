@@ -9,14 +9,20 @@
     "seed": "node src/db/seed.js"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1026.0",
+    "@aws-sdk/s3-request-presigner": "^3.1026.0",
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^11.7.0",
+    "connect-sqlite3": "^0.9.16",
     "cors": "^2.8.5",
     "express": "^4.21.1",
+    "express-session": "^1.19.0",
     "jsonwebtoken": "^9.0.2",
     "multer": "^1.4.5-lts.1",
     "nodemailer": "^6.9.16",
     "pdfkit": "^0.15.1",
+    "qrcode": "^1.5.4",
+    "speakeasy": "^2.0.0",
     "uuid": "^11.0.3"
   }
 }

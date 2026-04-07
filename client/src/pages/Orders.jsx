@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
-import { Plus, Search, Filter, ArrowUpDown } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Plus, Search, ArrowUpDown } from 'lucide-react';
 import api from '../lib/api';
-import { formatDate, formatCurrency, STATUS_FLOW } from '../lib/utils';
+import { formatDate, formatCurrency, ORDER_STATUSES, statusLabel, destinationLabel, formatContainers, countMissingContainerNumbers } from '../lib/utils';
 import StatusBadge from '../components/StatusBadge';
 import { TableSkeleton } from '../components/LoadingSkeleton';
 
@@ -47,15 +47,20 @@ export default function Orders() {
       <div className="card !p-4 flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input value={search} onChange={e => setSearch(e.target.value)} className="input-field pl-9" placeholder="Search orders, products, suppliers..." />
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="input-field pl-9"
+            placeholder="Search orders, products, suppliers..."
+          />
         </div>
         <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="input-field w-full sm:w-44">
           <option value="">All Statuses</option>
-          {STATUS_FLOW.map(s => <option key={s} value={s}>{s}</option>)}
+          {ORDER_STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
         <select value={supplierFilter} onChange={e => setSupplierFilter(e.target.value)} className="input-field w-full sm:w-48">
           <option value="">All Suppliers</option>
-          {suppliers.map(s => <option key={s.id} value={s.id}>{s.company_name}</option>)}
+          {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
       </div>
 
@@ -71,10 +76,17 @@ export default function Orders() {
                   </th>
                   <th className="text-left p-3 font-medium text-gray-600">Product</th>
                   <th className="text-left p-3 font-medium text-gray-600">Supplier</th>
-                  <th className="text-left p-3 font-medium text-gray-600 cursor-pointer hover:text-gray-900" onClick={() => toggleSort('status')}>Status</th>
-                  <th className="text-left p-3 font-medium text-gray-600 cursor-pointer hover:text-gray-900" onClick={() => toggleSort('delivery')}>Expected Delivery</th>
-                  <th className="text-right p-3 font-medium text-gray-600 cursor-pointer hover:text-gray-900" onClick={() => toggleSort('amount')}>Amount</th>
-                  <th className="text-center p-3 font-medium text-gray-600">Docs</th>
+                  <th className="text-left p-3 font-medium text-gray-600">Containers</th>
+                  <th className="text-left p-3 font-medium text-gray-600">Destination</th>
+                  <th className="text-left p-3 font-medium text-gray-600 cursor-pointer hover:text-gray-900" onClick={() => toggleSort('status')}>
+                    Status <ArrowUpDown className="w-3 h-3 inline ml-1" />
+                  </th>
+                  <th className="text-left p-3 font-medium text-gray-600 cursor-pointer hover:text-gray-900" onClick={() => toggleSort('arrival')}>
+                    Expected Arrival <ArrowUpDown className="w-3 h-3 inline ml-1" />
+                  </th>
+                  <th className="text-right p-3 font-medium text-gray-600 cursor-pointer hover:text-gray-900" onClick={() => toggleSort('amount')}>
+                    Amount <ArrowUpDown className="w-3 h-3 inline ml-1" />
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -82,20 +94,28 @@ export default function Orders() {
                   <tr key={o.id} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
                     <td className="p-3">
                       <Link to={`/orders/${o.id}`} className="font-medium text-primary hover:underline">{o.order_number}</Link>
-                      <p className="text-xs text-gray-400">{formatDate(o.order_date)}</p>
+                      <p className="text-xs text-gray-400">{formatDate(o.date)}</p>
                     </td>
-                    <td className="p-3 text-gray-700 max-w-[200px] truncate">{o.product_name}</td>
-                    <td className="p-3 text-gray-600">{o.supplier_name}</td>
+                    <td className="p-3 text-gray-700 max-w-[180px] truncate">{o.product_name || '—'}</td>
+                    <td className="p-3 text-gray-600">{o.supplier_name || '—'}</td>
+                    <td className="p-3 text-gray-600 whitespace-nowrap">
+                      <div className="flex items-center gap-1.5">
+                        <span>{formatContainers(o.containers)}</span>
+                        {countMissingContainerNumbers(o.containers) > 0 && (
+                          <span className="text-[10px] bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded-full font-medium leading-none">
+                            {countMissingContainerNumbers(o.containers)} missing #
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="p-3 text-gray-600">{destinationLabel(o.destination, o.destination_custom)}</td>
                     <td className="p-3"><StatusBadge status={o.status} /></td>
-                    <td className="p-3 text-gray-600">{formatDate(o.expected_delivery_date)}</td>
-                    <td className="p-3 text-right font-medium">{formatCurrency(o.total_amount, o.currency)}</td>
-                    <td className="p-3 text-center">
-                      <span className={`text-xs font-medium ${o.document_count > 0 ? 'text-green-600' : 'text-gray-400'}`}>{o.document_count}</span>
-                    </td>
+                    <td className="p-3 text-gray-600">{formatDate(o.expected_arrival)}</td>
+                    <td className="p-3 text-right font-medium">{formatCurrency(o.amount, o.currency)}</td>
                   </tr>
                 ))}
                 {orders.length === 0 && (
-                  <tr><td colSpan={7} className="p-8 text-center text-gray-400">No orders found</td></tr>
+                  <tr><td colSpan={8} className="p-8 text-center text-gray-400">No orders found</td></tr>
                 )}
               </tbody>
             </table>

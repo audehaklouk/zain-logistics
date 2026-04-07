@@ -1,31 +1,47 @@
 import jwt from 'jsonwebtoken';
-
 import crypto from 'crypto';
+import { getDb } from '../db/database.js';
 
-// In production, JWT_SECRET must be set as an environment variable.
-// For local dev/demo, a random secret is generated per process start.
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
 
 export function generateToken(user) {
   return jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
 }
 
+// ── authenticate: session-first, JWT fallback ─────────────────────────
 export function authenticate(req, res, next) {
+  // 1. Check session
+  if (req.session?.userId) {
+    const db = getDb();
+    const user = db.prepare(
+      'SELECT id, email, display_name, role FROM users WHERE id = ? AND is_active = 1'
+    ).get(req.session.userId);
+    if (user) {
+      req.user = user;
+      // Keep our sessions table up-to-date
+      db.prepare("UPDATE sessions SET last_active = datetime('now') WHERE id = ?")
+        .run(req.session.id);
+      return next();
+    }
+    // Session exists but user gone/deactivated — clear it
+    req.session.destroy(() => {});
+  }
+
+  // 2. JWT fallback (for any clients still using the old token)
   const header = req.headers.authorization;
-  if (!header || !header.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Authentication required' });
+  if (header?.startsWith('Bearer ')) {
+    try {
+      const token = header.split(' ')[1];
+      req.user = jwt.verify(token, JWT_SECRET);
+      return next();
+    } catch { /* fall through */ }
   }
-  try {
-    const token = header.split(' ')[1];
-    req.user = jwt.verify(token, JWT_SECRET);
-    next();
-  } catch {
-    return res.status(401).json({ error: 'Invalid or expired token' });
-  }
+
+  return res.status(401).json({ error: 'Authentication required' });
 }
 
 export function requireAdmin(req, res, next) {
-  if (req.user.role !== 'admin') {
+  if (req.user?.role !== 'admin') {
     return res.status(403).json({ error: 'Admin access required' });
   }
   next();

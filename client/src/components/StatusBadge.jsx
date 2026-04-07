@@ -1,5 +1,5 @@
-import { statusBadgeClass } from '../lib/utils';
+import { statusBadgeClass, statusLabel } from '../lib/utils';
 
 export default function StatusBadge({ status }) {
-  return <span className={statusBadgeClass(status)}>{status}</span>;
+  return <span className={statusBadgeClass(status)}>{statusLabel(status)}</span>;
 }

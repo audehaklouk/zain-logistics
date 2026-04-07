@@ -3,7 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { useState } from 'react';
 import {
   LayoutDashboard, Package, Truck, FileText, Users, Bell, BarChart3, Building2,
-  LogOut, Menu, X
+  CreditCard, AlertCircle, CalendarDays, Shield, LogOut, Menu, X
 } from 'lucide-react';
 
 const navItems = [
@@ -11,12 +11,16 @@ const navItems = [
   { to: '/orders', icon: Package, label: 'Orders' },
   { to: '/suppliers', icon: Building2, label: 'Suppliers' },
   { to: '/documents', icon: FileText, label: 'Documents' },
+  { to: '/payments', icon: CreditCard, label: 'Payments' },
+  { to: '/claims', icon: AlertCircle, label: 'Claims' },
+  { to: '/calendar', icon: CalendarDays, label: 'Calendar' },
   { to: '/reports', icon: BarChart3, label: 'Reports' },
   { to: '/notifications', icon: Bell, label: 'Notifications' },
 ];
 
 const adminItems = [
   { to: '/users', icon: Users, label: 'Users' },
+  { to: '/admin', icon: Shield, label: 'Admin Panel' },
 ];
 
 export default function Layout() {
@@ -24,7 +28,7 @@ export default function Layout() {
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  const handleLogout = () => { logout(); navigate('/login'); };
+  const handleLogout = async () => { await logout(); navigate('/login'); };
 
   const items = isAdmin ? [...navItems, ...adminItems] : navItems;
 

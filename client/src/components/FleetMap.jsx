@@ -53,13 +53,15 @@ export default function FleetMap() {
       });
 
       const marker = L.marker([lat, lng], { icon }).addTo(map);
-      const eta = new Date(ship.delay?.newEta || ship.eta).toLocaleDateString();
+      const eta = ship.eta ? new Date(ship.eta).toLocaleDateString() : 'TBC';
+      const containers = ship.containerCount > 1 ? ` (+${ship.containerCount - 1} more)` : '';
       marker.bindPopup(`
-        <strong>${ship.vessel}</strong><br/>
-        ${ship.carrier} — ${ship.bookingNumber}<br/>
-        ${ship.origin.port} → ${ship.destination.port}<br/>
-        Status: <strong>${ship.status}</strong>${ship.delay ? ' (Delayed)' : ''}<br/>
-        ETA: ${eta}
+        <strong>${ship.vessel || ship.carrier}</strong><br/>
+        ${ship.carrier} · ${ship.bookingNumber}${containers}<br/>
+        ${ship.origin?.port || '?'} → ${ship.destination?.port || '?'}<br/>
+        <strong>${ship.productName || ship.orderNumber}</strong><br/>
+        Status: <strong>${ship.status}</strong>${ship.delay ? ' ⚠️ Delayed' : ''}<br/>
+        ETA: ${eta}${ship._demo ? '<br/><em style="color:#8b5cf6;font-size:10px">demo data</em>' : ''}
       `);
 
       // Route line to Aqaba

@@ -6,3 +6,5 @@ server/uploads/
 *.db
 .DS_Store
 .claude/
+
+.vercel

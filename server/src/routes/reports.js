@@ -1,173 +1,239 @@
 import { Router } from 'express';
-import PDFDocument from 'pdfkit';
 import { getDb } from '../db/database.js';
 import { authenticate } from '../middleware/auth.js';
+import PDFDocument from 'pdfkit';
 
 const router = Router();
 
-function getReportData(type, db) {
-  const today = new Date().toISOString().split('T')[0];
-  const weekFromNow = new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0];
+// ── Helpers ──────────────────────────────────────────────────────────
 
-  switch (type) {
-    case 'pending-shipment':
-      return {
-        title: 'Orders Pending Shipment',
-        data: db.prepare(`
-          SELECT o.order_number, o.product_name, s.company_name as supplier,
-            o.status, o.order_date, o.expected_delivery_date as expected_delivery,
-            o.currency || ' ' || printf('%.2f', o.total_amount) as amount,
-            o.booking_number, o.shipping_line
-          FROM orders o LEFT JOIN suppliers s ON o.supplier_id = s.id
-          WHERE o.status IN ('Confirmed', 'Shipped') ORDER BY o.order_date
-        `).all(),
-      };
-    case 'by-supplier':
-      return {
-        title: 'Orders by Supplier',
-        data: db.prepare(`
-          SELECT s.company_name as supplier, s.country,
-            COUNT(o.id) as total_orders,
-            SUM(CASE WHEN o.status NOT IN ('Delivered','Draft') THEN 1 ELSE 0 END) as active_orders,
-            'USD ' || printf('%.2f', COALESCE(SUM(o.total_amount), 0)) as total_spend,
-            GROUP_CONCAT(DISTINCT o.status) as statuses
-          FROM suppliers s LEFT JOIN orders o ON o.supplier_id = s.id
-          GROUP BY s.id ORDER BY SUM(o.total_amount) DESC
-        `).all(),
-      };
-    case 'monthly-summary':
-      return {
-        title: 'Monthly Order Summary',
-        data: db.prepare(`
-          SELECT strftime('%Y-%m', order_date) as month,
-            COUNT(*) as orders_placed,
-            SUM(CASE WHEN status = 'Delivered' THEN 1 ELSE 0 END) as delivered,
-            SUM(CASE WHEN status IN ('In Transit','Shipped') THEN 1 ELSE 0 END) as in_transit,
-            'USD ' || printf('%.2f', SUM(total_amount)) as total_value
-          FROM orders GROUP BY month ORDER BY month DESC LIMIT 12
-        `).all(),
-      };
-    case 'due-this-week':
-      return {
-        title: 'Shipments Due This Week',
-        data: db.prepare(`
-          SELECT o.order_number, o.product_name, s.company_name as supplier,
-            o.status, o.expected_delivery_date as eta,
-            o.booking_number, o.shipping_line, o.vessel_name as vessel,
-            o.currency || ' ' || printf('%.2f', o.total_amount) as amount
-          FROM orders o LEFT JOIN suppliers s ON o.supplier_id = s.id
-          WHERE o.expected_delivery_date BETWEEN ? AND ? AND o.status != 'Delivered'
-          ORDER BY o.expected_delivery_date
-        `).all(today, weekFromNow),
-      };
-    case 'overdue':
-      return {
-        title: 'Overdue Shipments',
-        data: db.prepare(`
-          SELECT o.order_number, o.product_name, s.company_name as supplier,
-            o.status, o.expected_delivery_date as was_due,
-            CAST(julianday('now') - julianday(o.expected_delivery_date) AS INTEGER) as days_overdue,
-            o.booking_number, o.shipping_line,
-            o.currency || ' ' || printf('%.2f', o.total_amount) as amount
-          FROM orders o LEFT JOIN suppliers s ON o.supplier_id = s.id
-          WHERE o.expected_delivery_date < ? AND o.status NOT IN ('Delivered', 'Draft')
-          ORDER BY o.expected_delivery_date
-        `).all(today),
-      };
-    default:
-      return null;
-  }
+function parseContainers(raw) {
+  try { return JSON.parse(raw || '[]'); } catch { return []; }
 }
 
-router.get('/:type', authenticate, (req, res) => {
+function containerSummary(containers) {
+  const counts = {};
+  for (const c of containers) counts[c.type] = (counts[c.type] || 0) + 1;
+  const parts = Object.entries(counts).map(([t, n]) => `${t} × ${n}`);
+  return parts.join(', ') || '—';
+}
+
+const DEST_MAP = { aqaba: 'Aqaba', ksa: 'KSA', um_qaser: 'Um Qaser', mersin: 'Mersin', lattakia: 'Lattakia', lebanon: 'Lebanon' };
+const LINE_MAP = { maersk: 'Maersk', hapag_lloyd: 'Hapag-Lloyd', cma_cgm: 'CMA CGM', msc: 'MSC' };
+const CCY_SYM  = { EUR: '€', USD: '$', GBP: '£' };
+
+function fmtDest(d, custom) { return DEST_MAP[d] || (d === 'other' ? custom || 'Other' : d || '—'); }
+function fmtLine(l, custom) { return LINE_MAP[l] || (l === 'other' ? custom || 'Other' : l || '—'); }
+function fmtAmt(a, c) {
+  if (a == null) return '—';
+  const sym = CCY_SYM[c] || (c ? c + ' ' : '');
+  return `${sym}${Number(a).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+function fmtDate(s) {
+  if (!s) return '—';
+  return new Date(s).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function generateAqbId() {
+  const year = new Date().getFullYear();
   const db = getDb();
-  const report = getReportData(req.params.type, db);
-  if (!report) return res.status(404).json({ error: 'Unknown report type' });
-  res.json(report);
+  const row = db.prepare(
+    'UPDATE report_counter SET last_number = last_number + 1 WHERE id = 1 RETURNING last_number'
+  ).get();
+  return `AQB-${year}-${String(row.last_number).padStart(3, '0')}`;
+}
+
+function fetchOrders(query = {}) {
+  const db = getDb();
+  const conds = [];
+  const params = [];
+
+  if (query.status) { conds.push('o.status = ?'); params.push(query.status); }
+  if (query.supplier_id) { conds.push('o.supplier_id = ?'); params.push(query.supplier_id); }
+  if (query.search) {
+    const q = `%${query.search}%`;
+    conds.push('(o.order_number LIKE ? OR o.product_name LIKE ? OR s.name LIKE ?)');
+    params.push(q, q, q);
+  }
+  if (query.date_from) { conds.push('o.date >= ?'); params.push(query.date_from); }
+  if (query.date_to)   { conds.push('o.date <= ?'); params.push(query.date_to); }
+
+  const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+
+  return db.prepare(`
+    SELECT o.id, o.order_number, o.containers, o.product_name,
+           s.name AS supplier_name, o.status,
+           o.shipping_line, o.shipping_line_custom,
+           o.expected_arrival, o.bank, o.amount, o.currency,
+           o.original_docs_received, o.destination, o.destination_custom, o.date
+    FROM orders o
+    LEFT JOIN suppliers s ON o.supplier_id = s.id
+    ${where}
+    ORDER BY o.id DESC
+  `).all(...params).map(o => {
+    const containers = parseContainers(o.containers);
+    return {
+      ...o,
+      container_size: containerSummary(containers),
+      container_count: containers.length,
+    };
+  });
+}
+
+// ── GET /api/reports — data for the table ────────────────────────────
+
+router.get('/', authenticate, (req, res) => {
+  res.json(fetchOrders(req.query));
 });
 
-router.get('/:type/csv', authenticate, (req, res) => {
-  const db = getDb();
-  const report = getReportData(req.params.type, db);
-  if (!report) return res.status(404).json({ error: 'Unknown report type' });
-  if (!report.data.length) return res.status(200).send('No data');
+// ── GET /api/reports/pdf — Aqaba Reports PDF ─────────────────────────
 
-  const headers = Object.keys(report.data[0]);
-  const csv = [headers.join(','), ...report.data.map(row => headers.map(h => `"${(row[h] ?? '').toString().replace(/"/g, '""')}"`).join(','))].join('\n');
+router.get('/pdf', authenticate, (req, res) => {
+  const orders = fetchOrders(req.query);
+  const generatedAt = fmtDate(new Date().toISOString());
 
-  const date = new Date().toISOString().split('T')[0];
-  res.setHeader('Content-Type', 'text/csv');
-  res.setHeader('Content-Disposition', `attachment; filename=ZainLogistics_${req.params.type}_${date}.csv`);
-  res.send(csv);
-});
-
-router.get('/:type/pdf', authenticate, (req, res) => {
-  const db = getDb();
-  const report = getReportData(req.params.type, db);
-  if (!report) return res.status(404).json({ error: 'Unknown report type' });
-
-  const user = db.prepare('SELECT display_name FROM users WHERE id = ?').get(req.user.id);
-  const date = new Date().toISOString().split('T')[0];
-
-  const doc = new PDFDocument({ margin: 50, size: 'A4', layout: 'landscape' });
+  const doc = new PDFDocument({ margin: 36, size: 'A4', layout: 'landscape' });
   res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `attachment; filename=ZainLogistics_${req.params.type}_${date}.pdf`);
+  res.setHeader('Content-Disposition', `attachment; filename="Aqaba-Report-${Date.now()}.pdf"`);
   doc.pipe(res);
 
-  // Header
-  doc.fontSize(22).fillColor('#1B2A4A').text('ZAIN LOGISTICS', 50, 40);
-  doc.fontSize(10).fillColor('#6E6E80').text('Order Management & Shipment Tracking', 50, 65);
-  doc.moveTo(50, 85).lineTo(770, 85).strokeColor('#E5E7EB').stroke();
+  // ── Title ──
+  doc.fontSize(18).font('Helvetica-Bold').fillColor('#1e3a5f')
+    .text('Aqaba Reports', { align: 'center' });
+  doc.fontSize(9).font('Helvetica').fillColor('#666')
+    .text(`Generated: ${generatedAt}  |  Records: ${orders.length}`, { align: 'center' });
+  doc.moveDown(0.8);
 
-  // Title
-  doc.fontSize(16).fillColor('#1A1A2E').text(report.title, 50, 100);
-  doc.fontSize(9).fillColor('#6E6E80').text(`Generated: ${new Date().toLocaleString()} | By: ${user?.display_name || 'System'}`, 50, 122);
-
-  if (!report.data.length) {
-    doc.fontSize(12).fillColor('#6E6E80').text('No data available for this report.', 50, 160);
-  } else {
-    const headers = Object.keys(report.data[0]);
-    const colWidth = Math.min(140, 720 / headers.length);
-    let y = 150;
-
-    // Table header
-    doc.rect(50, y, 720, 20).fill('#1B2A4A');
-    headers.forEach((h, i) => {
-      doc.fontSize(8).fillColor('#FFFFFF').text(
-        h.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
-        55 + i * colWidth, y + 5, { width: colWidth - 10 }
-      );
-    });
-    y += 25;
-
-    // Table rows
-    report.data.forEach((row, idx) => {
-      if (y > 520) {
-        doc.addPage({ layout: 'landscape' });
-        y = 50;
-      }
-      const bg = idx % 2 === 0 ? '#FFFFFF' : '#F9FAFB';
-      doc.rect(50, y - 3, 720, 18).fill(bg);
-      headers.forEach((h, i) => {
-        const val = (row[h] ?? '').toString().substring(0, 30);
-        doc.fontSize(7).fillColor('#1A1A2E').text(val, 55 + i * colWidth, y, { width: colWidth - 10 });
-      });
-      y += 18;
-    });
-
-    // Summary
-    y += 20;
-    doc.fontSize(10).fillColor('#1A1A2E').text(`Total records: ${report.data.length}`, 50, y);
+  if (orders.length === 0) {
+    doc.fontSize(11).fillColor('#999').text('No orders found for the selected filters.', { align: 'center' });
+    doc.end();
+    return;
   }
 
-  // Footer on each page
-  const pages = doc.bufferedPageRange();
-  doc.fontSize(8).fillColor('#9CA3AF').text(
-    `Generated by Zain Logistics | ${date}`,
-    50, 560, { align: 'center', width: 720 }
-  );
+  const COLS = [
+    { key: 'aqb_id',        label: 'AQB ID',       width: 72 },
+    { key: 'order_number',  label: 'Order #',       width: 68 },
+    { key: 'container_size',label: 'Container',     width: 72 },
+    { key: 'container_count',label: 'Qty',          width: 26 },
+    { key: 'product_name',  label: 'Product',       width: 78 },
+    { key: 'supplier_name', label: 'Supplier',      width: 72 },
+    { key: 'status',        label: 'Status',        width: 60 },
+    { key: 'shipping_line', label: 'Shipping Line', width: 68 },
+    { key: 'expected_arrival',label: 'Exp. Delivery',width: 64 },
+    { key: 'bank',          label: 'Bank',          width: 52 },
+    { key: 'amount',        label: 'Amount',        width: 62 },
+    { key: 'original_docs', label: 'Orig. Docs',    width: 50 },
+    { key: 'destination',   label: 'Destination',   width: 58 },
+  ];
+  const tableW = COLS.reduce((s, c) => s + c.width, 0);
+  const LEFT = 36;
+  const ROW_H = 18;
+  const HDR_H = 20;
+
+  const drawHeader = (y) => {
+    doc.fillColor('#1e3a5f').rect(LEFT, y, tableW, HDR_H).fill();
+    let x = LEFT;
+    doc.fillColor('white').fontSize(6.5).font('Helvetica-Bold');
+    for (const col of COLS) {
+      doc.text(col.label, x + 3, y + 6.5, { width: col.width - 6, lineBreak: false });
+      x += col.width;
+    }
+    return y + HDR_H;
+  };
+
+  let y = drawHeader(doc.y);
+
+  for (let i = 0; i < orders.length; i++) {
+    const o = orders[i];
+    const row = {
+      aqb_id:          generateAqbId(),
+      order_number:    o.order_number,
+      container_size:  o.container_size,
+      container_count: String(o.container_count),
+      product_name:    o.product_name || '—',
+      supplier_name:   o.supplier_name || '—',
+      status:          o.status ? o.status.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : '—',
+      shipping_line:   fmtLine(o.shipping_line, o.shipping_line_custom),
+      expected_arrival: fmtDate(o.expected_arrival),
+      bank:            o.bank || '—',
+      amount:          fmtAmt(o.amount, o.currency),
+      original_docs:   o.original_docs_received ? 'Yes' : 'No',
+      destination:     fmtDest(o.destination, o.destination_custom),
+    };
+
+    // Alternate stripe
+    if (i % 2 === 0) {
+      doc.fillColor('#f8fafc').rect(LEFT, y, tableW, ROW_H).fill();
+    }
+
+    let x = LEFT;
+    doc.fillColor('#111827').fontSize(6.5).font('Helvetica');
+    for (const col of COLS) {
+      const val = String(row[col.key] ?? '—');
+      doc.text(val, x + 3, y + 5.5, { width: col.width - 6, lineBreak: false, ellipsis: true });
+      x += col.width;
+    }
+
+    // Row border
+    doc.strokeColor('#e5e7eb').lineWidth(0.4)
+      .moveTo(LEFT, y + ROW_H).lineTo(LEFT + tableW, y + ROW_H).stroke();
+
+    y += ROW_H;
+
+    // Page break
+    if (y > doc.page.height - 55) {
+      doc.addPage();
+      y = drawHeader(40);
+    }
+  }
+
+  // Footer
+  doc.fontSize(7).fillColor('#aaa')
+    .text(`Zain Logistics Portal  •  ${generatedAt}`, LEFT, doc.page.height - 28, { width: tableW, align: 'center' });
 
   doc.end();
+});
+
+// ── GET /api/reports/csv — CSV download ──────────────────────────────
+
+router.get('/csv', authenticate, (req, res) => {
+  const orders = fetchOrders(req.query);
+
+  const headers = [
+    'Order #', 'Container Size', 'Qty', 'Product', 'Supplier',
+    'Status', 'Shipping Line', 'Exp. Delivery', 'Bank',
+    'Amount', 'Currency', 'Orig. Docs', 'Destination', 'Order Date',
+  ];
+
+  const escape = (v) => {
+    const s = String(v ?? '');
+    return s.includes(',') || s.includes('"') || s.includes('\n')
+      ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+
+  const rows = orders.map(o => [
+    o.order_number,
+    o.container_size,
+    o.container_count,
+    o.product_name || '',
+    o.supplier_name || '',
+    o.status ? o.status.replace(/_/g, ' ') : '',
+    fmtLine(o.shipping_line, o.shipping_line_custom),
+    o.expected_arrival || '',
+    o.bank || '',
+    o.amount != null ? o.amount : '',
+    o.currency || '',
+    o.original_docs_received ? 'Yes' : 'No',
+    fmtDest(o.destination, o.destination_custom),
+    o.date || '',
+  ].map(escape).join(','));
+
+  const csv = [headers.map(escape).join(','), ...rows].join('\r\n');
+  const date = new Date().toISOString().split('T')[0];
+
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', `attachment; filename="Aqaba-Report-${date}.csv"`);
+  res.send(csv);
 });
 
 export default router;
