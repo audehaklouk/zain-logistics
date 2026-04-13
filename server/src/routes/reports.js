@@ -86,11 +86,53 @@ router.get('/', authenticate, (req, res) => {
   res.json(fetchOrders(req.query));
 });
 
+// ── Column definitions (shared between PDF and CSV) ───────────────────
+// clientKey matches the key names used in the frontend visibleCols Set.
+// null clientKey = always included (AQB ID).
+
+const PDF_COL_DEFS = [
+  { key: 'aqb_id',          clientKey: null,                     label: 'AQB ID',        width: 72 },
+  { key: 'order_number',    clientKey: 'order_number',           label: 'Order #',        width: 68 },
+  { key: 'container_size',  clientKey: 'container_size',         label: 'Container',      width: 72 },
+  { key: 'container_count', clientKey: 'container_count',        label: 'Qty',            width: 26 },
+  { key: 'product_name',    clientKey: 'product_name',           label: 'Product',        width: 78 },
+  { key: 'supplier_name',   clientKey: 'supplier_name',          label: 'Supplier',       width: 72 },
+  { key: 'status',          clientKey: 'status',                 label: 'Status',         width: 60 },
+  { key: 'shipping_line',   clientKey: 'shipping_line',          label: 'Shipping Line',  width: 68 },
+  { key: 'expected_arrival',clientKey: 'expected_arrival',       label: 'Exp. Delivery',  width: 64 },
+  { key: 'bank',            clientKey: 'bank',                   label: 'Bank',           width: 52 },
+  { key: 'amount',          clientKey: 'amount',                 label: 'Amount',         width: 62 },
+  { key: 'original_docs',   clientKey: 'original_docs_received', label: 'Orig. Docs',     width: 50 },
+  { key: 'destination',     clientKey: 'destination',            label: 'Destination',    width: 58 },
+];
+
+const CSV_COL_DEFS = [
+  { clientKey: 'order_number',          label: 'Order #',        getValue: o => o.order_number },
+  { clientKey: 'container_size',        label: 'Container Size', getValue: o => o.container_size },
+  { clientKey: 'container_count',       label: 'Qty',            getValue: o => o.container_count },
+  { clientKey: 'product_name',          label: 'Product',        getValue: o => o.product_name || '' },
+  { clientKey: 'supplier_name',         label: 'Supplier',       getValue: o => o.supplier_name || '' },
+  { clientKey: 'status',                label: 'Status',         getValue: o => o.status ? o.status.replace(/_/g, ' ') : '' },
+  { clientKey: 'shipping_line',         label: 'Shipping Line',  getValue: o => fmtLine(o.shipping_line, o.shipping_line_custom) },
+  { clientKey: 'expected_arrival',      label: 'Exp. Delivery',  getValue: o => o.expected_arrival || '' },
+  { clientKey: 'bank',                  label: 'Bank',           getValue: o => o.bank || '' },
+  { clientKey: 'amount',                label: 'Amount',         getValue: o => o.amount != null ? o.amount : '' },
+  { clientKey: 'amount',                label: 'Currency',       getValue: o => o.currency || '', currencyCompanion: true },
+  { clientKey: 'original_docs_received',label: 'Orig. Docs',     getValue: o => o.original_docs_received ? 'Yes' : 'No' },
+  { clientKey: 'destination',           label: 'Destination',    getValue: o => fmtDest(o.destination, o.destination_custom) },
+];
+
+function parseVisibleCols(query) {
+  if (!query.columns) return null; // null = all columns
+  return new Set(query.columns.split(',').map(s => s.trim()).filter(Boolean));
+}
+
 // ── GET /api/reports/pdf — Aqaba Reports PDF ─────────────────────────
 
 router.get('/pdf', authenticate, (req, res) => {
   const orders = fetchOrders(req.query);
   const generatedAt = fmtDate(new Date().toISOString());
+  const visibleCols = parseVisibleCols(req.query);
 
   const doc = new PDFDocument({ margin: 36, size: 'A4', layout: 'landscape' });
   res.setHeader('Content-Type', 'application/pdf');
@@ -110,21 +152,10 @@ router.get('/pdf', authenticate, (req, res) => {
     return;
   }
 
-  const COLS = [
-    { key: 'aqb_id',        label: 'AQB ID',       width: 72 },
-    { key: 'order_number',  label: 'Order #',       width: 68 },
-    { key: 'container_size',label: 'Container',     width: 72 },
-    { key: 'container_count',label: 'Qty',          width: 26 },
-    { key: 'product_name',  label: 'Product',       width: 78 },
-    { key: 'supplier_name', label: 'Supplier',      width: 72 },
-    { key: 'status',        label: 'Status',        width: 60 },
-    { key: 'shipping_line', label: 'Shipping Line', width: 68 },
-    { key: 'expected_arrival',label: 'Exp. Delivery',width: 64 },
-    { key: 'bank',          label: 'Bank',          width: 52 },
-    { key: 'amount',        label: 'Amount',        width: 62 },
-    { key: 'original_docs', label: 'Orig. Docs',    width: 50 },
-    { key: 'destination',   label: 'Destination',   width: 58 },
-  ];
+  // Filter columns: always include aqb_id (clientKey === null), then respect visibleCols
+  const COLS = PDF_COL_DEFS.filter(c =>
+    c.clientKey === null || !visibleCols || visibleCols.has(c.clientKey)
+  );
   const tableW = COLS.reduce((s, c) => s + c.width, 0);
   const LEFT = 36;
   const ROW_H = 18;
@@ -198,12 +229,7 @@ router.get('/pdf', authenticate, (req, res) => {
 
 router.get('/csv', authenticate, (req, res) => {
   const orders = fetchOrders(req.query);
-
-  const headers = [
-    'Order #', 'Container Size', 'Qty', 'Product', 'Supplier',
-    'Status', 'Shipping Line', 'Exp. Delivery', 'Bank',
-    'Amount', 'Currency', 'Orig. Docs', 'Destination', 'Order Date',
-  ];
+  const visibleCols = parseVisibleCols(req.query);
 
   const escape = (v) => {
     const s = String(v ?? '');
@@ -211,22 +237,15 @@ router.get('/csv', authenticate, (req, res) => {
       ? `"${s.replace(/"/g, '""')}"` : s;
   };
 
-  const rows = orders.map(o => [
-    o.order_number,
-    o.container_size,
-    o.container_count,
-    o.product_name || '',
-    o.supplier_name || '',
-    o.status ? o.status.replace(/_/g, ' ') : '',
-    fmtLine(o.shipping_line, o.shipping_line_custom),
-    o.expected_arrival || '',
-    o.bank || '',
-    o.amount != null ? o.amount : '',
-    o.currency || '',
-    o.original_docs_received ? 'Yes' : 'No',
-    fmtDest(o.destination, o.destination_custom),
-    o.date || '',
-  ].map(escape).join(','));
+  // Filter cols: currency companion follows amount visibility
+  const cols = CSV_COL_DEFS.filter(c =>
+    !visibleCols || visibleCols.has(c.clientKey)
+  );
+
+  const headers = cols.map(c => c.label);
+  const rows = orders.map(o =>
+    cols.map(c => escape(c.getValue(o))).join(',')
+  );
 
   const csv = [headers.map(escape).join(','), ...rows].join('\r\n');
   const date = new Date().toISOString().split('T')[0];

@@ -1,6 +1,7 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import {
   LayoutDashboard, Package, Truck, FileText, Users, Bell, BarChart3, Building2,
   CreditCard, AlertCircle, CalendarDays, Shield, LogOut, Menu, X, ChevronLeft, ChevronRight
@@ -154,11 +155,14 @@ export default function Layout() {
       {/* ── Main content ── */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Mobile top bar */}
-        <header className="bg-white border-b border-gray-100 px-4 lg:hidden h-14 flex items-center gap-4 flex-shrink-0">
+        <header className="bg-white border-b border-gray-100 px-4 lg:hidden h-14 flex items-center gap-2 flex-shrink-0">
           <button onClick={() => setMobileOpen(true)} className="p-2 -ml-2 rounded-lg hover:bg-gray-100">
             <Menu className="w-5 h-5 text-gray-600" />
           </button>
-          <span className="font-semibold text-gray-900">Zain Logistics</span>
+          <span className="font-semibold text-gray-900 flex-1">Zain Logistics</span>
+          <Link to="/calendar" className="p-2 rounded-lg hover:bg-gray-100 text-gray-500 hover:text-primary transition-colors" title="Calendar">
+            <CalendarDays className="w-5 h-5" />
+          </Link>
         </header>
         <main className="flex-1 p-4 lg:p-6 overflow-auto">
           <Outlet />

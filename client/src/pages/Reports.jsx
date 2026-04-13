@@ -134,10 +134,15 @@ export default function Reports() {
     return params;
   };
 
+  const exportParams = () => ({
+    ...buildParams(),
+    columns: [...visibleCols].join(','),
+  });
+
   const exportPDF = async () => {
     setExporting(true);
     try {
-      const res = await api.get('/reports/pdf', { params: buildParams(), responseType: 'blob' });
+      const res = await api.get('/reports/pdf', { params: exportParams(), responseType: 'blob' });
       const date = new Date().toISOString().split('T')[0];
       downloadBlob(res.data, `Aqaba-Report-${date}.pdf`, 'application/pdf');
       toast.success('PDF downloaded');
@@ -148,7 +153,7 @@ export default function Reports() {
   const exportCSV = async () => {
     setExporting(true);
     try {
-      const res = await api.get('/reports/csv', { params: buildParams(), responseType: 'blob' });
+      const res = await api.get('/reports/csv', { params: exportParams(), responseType: 'blob' });
       const date = new Date().toISOString().split('T')[0];
       downloadBlob(res.data, `Aqaba-Report-${date}.csv`, 'text/csv');
       toast.success('CSV downloaded');
