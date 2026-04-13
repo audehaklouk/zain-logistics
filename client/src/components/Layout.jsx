@@ -59,12 +59,12 @@ export default function Layout() {
         `}
       >
         {/* Logo */}
-        <div className={`border-b border-white/10 flex items-center h-16 flex-shrink-0 ${collapsed ? 'justify-center px-0' : 'px-4 gap-3'}`}>
+        <div className={`border-b border-white/10 flex items-center h-24 flex-shrink-0 ${collapsed ? 'justify-center px-0' : 'px-4 gap-3'}`}>
           {collapsed ? (
-            <img src="/logo.png" alt="Al-Zanbaka" className="w-8 h-8 object-contain" />
+            <img src="/logo.png" alt="Al-Zanbaka" className="w-14 h-14 object-contain" />
           ) : (
             <>
-              <img src="/logo.png" alt="Al-Zanbaka" className="h-9 w-auto object-contain flex-shrink-0" />
+              <img src="/logo.png" alt="Al-Zanbaka" className="h-18 w-auto object-contain flex-shrink-0" style={{ height: '72px' }} />
               <div className="overflow-hidden">
                 <h1 className="font-bold text-white text-base leading-tight whitespace-nowrap">Al-Zanbaka</h1>
                 <p className="text-[11px] text-white/40 whitespace-nowrap">Order Management</p>

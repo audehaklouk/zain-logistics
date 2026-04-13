@@ -299,7 +299,7 @@ export default function Login() {
         {/* Logo */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center mb-4">
-            <img src="/logo.png" alt="Al-Zanbaka" className="h-20 w-auto drop-shadow-md" />
+            <img src="/logo.png" alt="Al-Zanbaka" className="h-40 w-auto drop-shadow-md" />
           </div>
           <h1 className="text-2xl font-bold text-gray-900">Al-Zanbaka</h1>
           <p className="text-sm text-gray-500 mt-1">Order Management & Shipment Tracking</p>
