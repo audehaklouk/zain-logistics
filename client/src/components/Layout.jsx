@@ -3,8 +3,8 @@ import { useAuth } from '../context/AuthContext';
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  LayoutDashboard, Package, Truck, FileText, Users, Bell, BarChart3, Building2,
-  CreditCard, AlertCircle, CalendarDays, Shield, LogOut, Menu, X, ChevronLeft, ChevronRight
+  LayoutDashboard, Package, FileText, Users, Bell, BarChart3, Building2,
+  CreditCard, AlertCircle, CalendarDays, Shield, LogOut, Menu, ChevronLeft, ChevronRight
 } from 'lucide-react';
 
 const navItems = [
@@ -59,15 +59,17 @@ export default function Layout() {
         `}
       >
         {/* Logo */}
-        <div className={`border-b border-white/10 flex items-center h-16 flex-shrink-0 ${collapsed ? 'justify-center px-0' : 'px-5 gap-3'}`}>
-          <div className="w-9 h-9 rounded-lg bg-accent flex items-center justify-center flex-shrink-0">
-            <Truck className="w-5 h-5 text-white" />
-          </div>
-          {!collapsed && (
-            <div className="overflow-hidden">
-              <h1 className="font-bold text-white text-lg leading-tight whitespace-nowrap">Zain Logistics</h1>
-              <p className="text-[11px] text-white/40 whitespace-nowrap">Order Management</p>
-            </div>
+        <div className={`border-b border-white/10 flex items-center h-16 flex-shrink-0 ${collapsed ? 'justify-center px-0' : 'px-4 gap-3'}`}>
+          {collapsed ? (
+            <img src="/logo.png" alt="Al-Zanbaka" className="w-8 h-8 object-contain" />
+          ) : (
+            <>
+              <img src="/logo.png" alt="Al-Zanbaka" className="h-9 w-auto object-contain flex-shrink-0" />
+              <div className="overflow-hidden">
+                <h1 className="font-bold text-white text-base leading-tight whitespace-nowrap">Al-Zanbaka</h1>
+                <p className="text-[11px] text-white/40 whitespace-nowrap">Order Management</p>
+              </div>
+            </>
           )}
         </div>
 
@@ -159,7 +161,7 @@ export default function Layout() {
           <button onClick={() => setMobileOpen(true)} className="p-2 -ml-2 rounded-lg hover:bg-gray-100">
             <Menu className="w-5 h-5 text-gray-600" />
           </button>
-          <span className="font-semibold text-gray-900 flex-1">Zain Logistics</span>
+          <span className="font-semibold text-gray-900 flex-1">Al-Zanbaka</span>
           <Link to="/calendar" className="p-2 rounded-lg hover:bg-gray-100 text-gray-500 hover:text-primary transition-colors" title="Calendar">
             <CalendarDays className="w-5 h-5" />
           </Link>

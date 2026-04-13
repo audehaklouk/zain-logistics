@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Truck, Eye, EyeOff, ShieldCheck, KeyRound, Copy, Check } from 'lucide-react';
+import { Eye, EyeOff, ShieldCheck, KeyRound, Copy, Check } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 // ── Step: credentials ─────────────────────────────────────────────────
@@ -26,12 +26,12 @@ function CredentialsStep({ onDone }) {
   return (
     <>
       <h2 className="text-xl font-bold text-gray-900 mb-1">Sign in</h2>
-      <p className="text-sm text-gray-500 mb-6">Zain Logistics Portal</p>
+      <p className="text-sm text-gray-500 mb-6">Al-Zanbaka Logistics Portal</p>
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
           <input type="email" value={email} onChange={e => setEmail(e.target.value)}
-            className="input-field" placeholder="you@zainlogistics.com" required autoFocus />
+            className="input-field" placeholder="you@alzanbaka.com" required autoFocus />
         </div>
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
@@ -298,10 +298,10 @@ export default function Login() {
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-primary mb-4 shadow-lg shadow-primary/20">
-            <Truck className="w-7 h-7 text-white" />
+          <div className="inline-flex items-center justify-center mb-4">
+            <img src="/logo.png" alt="Al-Zanbaka" className="h-20 w-auto drop-shadow-md" />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">Zain Logistics</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Al-Zanbaka</h1>
           <p className="text-sm text-gray-500 mt-1">Order Management & Shipment Tracking</p>
         </div>
 
