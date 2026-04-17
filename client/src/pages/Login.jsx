@@ -12,15 +12,25 @@ function CredentialsStep({ onDone }) {
   const [loading, setLoading] = useState(false);
   const { login } = useAuth();
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const submit = async (emailArg, passwordArg) => {
     setLoading(true);
     try {
-      const status = await login(email, password);
+      const status = await login(emailArg, passwordArg);
       onDone(status);
     } catch (err) {
       toast.error(err.response?.data?.error || 'Login failed');
     } finally { setLoading(false); }
+  };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    submit(email, password);
+  };
+
+  const handleDemo = (acc) => {
+    setEmail(acc.email);
+    setPassword(acc.password);
+    submit(acc.email, acc.password);
   };
 
   return (
@@ -56,9 +66,9 @@ function CredentialsStep({ onDone }) {
             { label: 'Admin', email: 'admin@zainlogistics.com', password: 'admin123' },
             { label: 'Team', email: 'team@zainlogistics.com', password: 'team123' },
           ].map(acc => (
-            <button key={acc.email}
-              onClick={() => { setEmail(acc.email); setPassword(acc.password); }}
-              className="w-full text-left p-2.5 rounded-lg border border-gray-100 hover:border-primary/30 hover:bg-primary/5 transition-colors text-sm">
+            <button key={acc.email} type="button" disabled={loading}
+              onClick={() => handleDemo(acc)}
+              className="w-full text-left p-2.5 rounded-lg border border-gray-100 hover:border-primary/30 hover:bg-primary/5 transition-colors text-sm disabled:opacity-50">
               <span className="font-medium text-gray-700">{acc.label}</span>
               <span className="text-gray-400 ml-2">{acc.email}</span>
             </button>
