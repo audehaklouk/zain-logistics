@@ -81,10 +81,12 @@ export function AuthProvider({ children }) {
 
   const confirmTotp = async (code) => {
     const res = await api.post('/auth/totp/confirm', { code });
-    // Refresh user so totp_enabled is updated
+    // Refresh user so totp_enabled is updated. Keep loginStep as
+    // 'totp_setup_suggested' so the setup component stays mounted long
+    // enough for the user to see & copy their backup codes — the parent
+    // clears loginStep when they click "Continue to Dashboard".
     const me = await api.get('/auth/me');
     setUser(me.data);
-    setLoginStep(null);
     return res.data; // { success, backup_codes }
   };
 
