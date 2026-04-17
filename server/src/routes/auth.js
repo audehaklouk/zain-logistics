@@ -72,6 +72,7 @@ router.post('/login', async (req, res) => {
       return res.json({
         status: needsSetup ? 'totp_setup_suggested' : 'ok',
         user: safeUser(user),
+        token: generateToken(user),
       });
     } catch { return res.status(500).json({ error: 'Session error' }); }
   }
@@ -115,6 +116,7 @@ router.post('/change-password', async (req, res) => {
     return res.json({
       status: !user.totp_secret ? 'totp_setup_suggested' : 'ok',
       user: safeUser(user),
+      token: generateToken(user),
     });
   } catch { return res.status(500).json({ error: 'Session error' }); }
 });
@@ -155,7 +157,7 @@ router.post('/totp/verify', async (req, res) => {
   try {
     await createSession(req, db, user);
     logAttempt(db, { userId: user.id, email: user.email, ip: req.ip, ua: req.headers['user-agent'], success: true });
-    return res.json({ status: 'ok', user: safeUser(user) });
+    return res.json({ status: 'ok', user: safeUser(user), token: generateToken(user) });
   } catch { return res.status(500).json({ error: 'Session error' }); }
 });
 

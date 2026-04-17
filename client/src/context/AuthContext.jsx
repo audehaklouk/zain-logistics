@@ -32,9 +32,13 @@ export function AuthProvider({ children }) {
     return () => clearInterval(id);
   }, [user]);
 
+  const saveToken = (token) => {
+    if (token) localStorage.setItem('zl_token', token);
+  };
+
   const login = async (email, password) => {
     const res = await api.post('/auth/login', { email, password });
-    const { status, user: u } = res.data;
+    const { status, user: u, token } = res.data;
 
     if (status === 'password_change_required') {
       setLoginStep('password_change_required');
@@ -46,13 +50,13 @@ export function AuthProvider({ children }) {
     }
     if (status === 'totp_setup_suggested') {
       // Logged in but no 2FA yet — user can set up or skip
-      localStorage.removeItem('zl_token');
+      saveToken(token);
       setUser(u);
       setLoginStep('totp_setup_suggested');
       return status;
     }
     // status === 'ok'
-    localStorage.removeItem('zl_token');
+    saveToken(token);
     setUser(u);
     setLoginStep(null);
     return status;
@@ -60,15 +64,16 @@ export function AuthProvider({ children }) {
 
   const changePassword = async (newPassword) => {
     const res = await api.post('/auth/change-password', { new_password: newPassword });
-    const { status, user: u } = res.data;
+    const { status, user: u, token } = res.data;
     if (status === 'totp_required') { setLoginStep('totp_required'); return status; }
-    if (status === 'totp_setup_suggested') { setUser(u); setLoginStep('totp_setup_suggested'); return status; }
-    setUser(u); setLoginStep(null);
+    if (status === 'totp_setup_suggested') { saveToken(token); setUser(u); setLoginStep('totp_setup_suggested'); return status; }
+    saveToken(token); setUser(u); setLoginStep(null);
     return status;
   };
 
   const verifyTotp = async (code) => {
     const res = await api.post('/auth/totp/verify', { code });
+    saveToken(res.data.token);
     setUser(res.data.user);
     setLoginStep(null);
     return res.data;
