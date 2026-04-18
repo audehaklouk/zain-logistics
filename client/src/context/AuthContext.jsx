@@ -8,6 +8,7 @@ export function AuthProvider({ children }) {
   const [user, setUser]         = useState(null);
   const [loginStep, setLoginStep] = useState(null);
   const [loading, setLoading]   = useState(true);
+  const [pendingToken, setPendingToken] = useState(null);
 
   // On mount: verify session with server
   useEffect(() => {
@@ -38,13 +39,15 @@ export function AuthProvider({ children }) {
 
   const login = async (email, password) => {
     const res = await api.post('/auth/login', { email, password });
-    const { status, user: u, token } = res.data;
+    const { status, user: u, token, pending_token } = res.data;
 
     if (status === 'password_change_required') {
+      setPendingToken(pending_token || null);
       setLoginStep('password_change_required');
       return status;
     }
     if (status === 'totp_required') {
+      setPendingToken(pending_token || null);
       setLoginStep('totp_required');
       return status;
     }
@@ -63,17 +66,21 @@ export function AuthProvider({ children }) {
   };
 
   const changePassword = async (newPassword) => {
-    const res = await api.post('/auth/change-password', { new_password: newPassword });
-    const { status, user: u, token } = res.data;
-    if (status === 'totp_required') { setLoginStep('totp_required'); return status; }
-    if (status === 'totp_setup_suggested') { saveToken(token); setUser(u); setLoginStep('totp_setup_suggested'); return status; }
-    saveToken(token); setUser(u); setLoginStep(null);
+    const res = await api.post('/auth/change-password', {
+      new_password: newPassword,
+      pending_token: pendingToken,
+    });
+    const { status, user: u, token, pending_token: next } = res.data;
+    if (status === 'totp_required') { setPendingToken(next || null); setLoginStep('totp_required'); return status; }
+    if (status === 'totp_setup_suggested') { saveToken(token); setPendingToken(null); setUser(u); setLoginStep('totp_setup_suggested'); return status; }
+    saveToken(token); setPendingToken(null); setUser(u); setLoginStep(null);
     return status;
   };
 
   const verifyTotp = async (code) => {
-    const res = await api.post('/auth/totp/verify', { code });
+    const res = await api.post('/auth/totp/verify', { code, pending_token: pendingToken });
     saveToken(res.data.token);
+    setPendingToken(null);
     setUser(res.data.user);
     setLoginStep(null);
     return res.data;

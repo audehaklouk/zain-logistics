@@ -8,6 +8,21 @@ export function generateToken(user) {
   return jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
 }
 
+// Short-lived stage-locked token used during multi-step login (password
+// change or TOTP verify). Does NOT grant API access — verifyPendingToken
+// must be called with the matching stage.
+export function generatePendingToken(userId, stage) {
+  return jwt.sign({ pending_user_id: userId, stage }, JWT_SECRET, { expiresIn: '10m' });
+}
+
+export function verifyPendingToken(token, stage) {
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    if (payload.stage !== stage) return null;
+    return payload.pending_user_id || null;
+  } catch { return null; }
+}
+
 // ── authenticate: session-first, JWT fallback ─────────────────────────
 export function authenticate(req, res, next) {
   // 1. Check session

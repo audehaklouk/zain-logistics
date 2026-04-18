@@ -5,7 +5,7 @@ import { v4 as uuid } from 'uuid';
 import speakeasy from 'speakeasy';
 import QRCode from 'qrcode';
 import { getDb } from '../db/database.js';
-import { generateToken, authenticate, requireAdmin } from '../middleware/auth.js';
+import { generateToken, generatePendingToken, verifyPendingToken, authenticate, requireAdmin } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -53,14 +53,20 @@ router.post('/login', async (req, res) => {
   // Step 1 — force password change
   if (user.must_change_password) {
     req.session.pending_user_id = user.id;
-    return res.json({ status: 'password_change_required' });
+    return res.json({
+      status: 'password_change_required',
+      pending_token: generatePendingToken(user.id, 'password_change'),
+    });
   }
 
   // Step 2 — 2FA required
   if (user.totp_enabled) {
     req.session.pending_user_id = user.id;
     logAttempt(db, { userId: user.id, email, ip: req.ip, ua: req.headers['user-agent'], success: true });
-    return res.json({ status: 'totp_required' });
+    return res.json({
+      status: 'totp_required',
+      pending_token: generatePendingToken(user.id, 'totp'),
+    });
   }
 
   // Step 3 — first login, no 2FA yet → suggest setup but don't block
@@ -89,12 +95,15 @@ router.post('/logout', (req, res) => {
 
 // ── POST /api/auth/change-password ────────────────────────────────────
 router.post('/change-password', async (req, res) => {
-  const { new_password } = req.body;
+  const { new_password, pending_token } = req.body;
   if (!new_password || new_password.length < 8)
     return res.status(400).json({ error: 'Password must be at least 8 characters' });
 
-  // Allow pending session (post-login) or fully authenticated session
-  const userId = req.session?.pending_user_id || req.session?.userId;
+  // Accept session (cookie) OR stage-locked pending token (stateless-safe)
+  const userId =
+    req.session?.pending_user_id ||
+    req.session?.userId ||
+    verifyPendingToken(pending_token, 'password_change');
   if (!userId) return res.status(401).json({ error: 'Authentication required' });
 
   const db = getDb();
@@ -108,7 +117,10 @@ router.post('/change-password', async (req, res) => {
   // If they have 2FA, now require it
   if (user.totp_enabled) {
     req.session.pending_user_id = userId;
-    return res.json({ status: 'totp_required' });
+    return res.json({
+      status: 'totp_required',
+      pending_token: generatePendingToken(userId, 'totp'),
+    });
   }
 
   try {
@@ -123,8 +135,10 @@ router.post('/change-password', async (req, res) => {
 
 // ── POST /api/auth/totp/verify — verify code during login ─────────────
 router.post('/totp/verify', async (req, res) => {
-  const { code } = req.body;
-  const userId = req.session?.pending_user_id;
+  const { code, pending_token } = req.body;
+  const userId =
+    req.session?.pending_user_id ||
+    verifyPendingToken(pending_token, 'totp');
   if (!userId) return res.status(401).json({ error: 'No pending authentication' });
   if (!code)   return res.status(400).json({ error: 'Code is required' });
 
