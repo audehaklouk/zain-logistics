@@ -2,7 +2,17 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { getDb } from '../db/database.js';
 
-const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
+// On serverless platforms (Vercel) every cold-start spawns a new container,
+// so a random default makes tokens issued by one container unverifiable by
+// the next. Fall back to a stable value when no env var is set — the demo
+// deploy is safe to ship with this default; production should set JWT_SECRET.
+const JWT_SECRET =
+  process.env.JWT_SECRET ||
+  'zain-logistics-demo-jwt-secret-please-override-in-production';
+
+if (!process.env.JWT_SECRET) {
+  console.warn('[auth] JWT_SECRET not set — using insecure demo default');
+}
 
 export function generateToken(user) {
   return jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
